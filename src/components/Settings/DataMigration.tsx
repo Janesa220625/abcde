@@ -17,31 +17,20 @@ import {
   ArrowRight,
   Database,
   HardDrive,
-  Flame,
   Trash2,
   FileX,
   RefreshCw,
-  Cloud,
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   migrateLocalStorageToSupabase,
-  migrateFirebaseToSupabase,
   checkDataConsistency,
 } from "@/lib/migration";
 import { checkSupabaseConnection } from "@/services/supabase";
-import {
-  checkFirebaseConnection,
-  checkFirebaseStorage,
-} from "@/services/firebase";
 import { deleteAllTableData, deleteAllStorageFiles } from "@/lib/supabaseReset";
-import { createStorageBucket } from "@/services/firebaseAdmin";
 
 export default function DataMigration() {
   const [isMigrating, setIsMigrating] = useState(false);
-  const [migrationSource, setMigrationSource] = useState<
-    "localStorage" | "firebase"
-  >("localStorage");
   const [migrationResult, setMigrationResult] = useState<{
     success?: boolean;
     migrated?: string[];
@@ -52,29 +41,6 @@ export default function DataMigration() {
   const [consistencyResult, setConsistencyResult] = useState<{
     consistent?: boolean;
     inconsistencies?: string[];
-  }>({});
-
-  const [firebaseStatus, setFirebaseStatus] = useState<{
-    checked: boolean;
-    connected: boolean;
-    error?: string;
-  }>({ checked: false, connected: false });
-
-  // State for Firebase storage check
-  const [firebaseStorageStatus, setFirebaseStorageStatus] = useState<{
-    checked: boolean;
-    available: boolean;
-    bucketName?: string;
-    error?: string;
-  }>({ checked: false, available: false });
-
-  // State for bucket creation
-  const [isCreatingBucket, setIsCreatingBucket] = useState(false);
-  const [customBucketName, setCustomBucketName] = useState("");
-  const [bucketCreationResult, setBucketCreationResult] = useState<{
-    success?: boolean;
-    bucketName?: string;
-    error?: string;
   }>({});
 
   // States for Supabase reset operations
@@ -107,107 +73,6 @@ export default function DataMigration() {
     }
   };
 
-  const checkFirebase = async () => {
-    try {
-      const status = await checkFirebaseConnection();
-      setFirebaseStatus({
-        checked: true,
-        connected: status.connected,
-        error: status.details.error,
-      });
-      return status.connected;
-    } catch (error) {
-      setFirebaseStatus({
-        checked: true,
-        connected: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unknown error checking Firebase",
-      });
-      return false;
-    }
-  };
-
-  const checkFirebaseStorageBucket = async () => {
-    try {
-      const status = await checkFirebaseStorage();
-      setFirebaseStorageStatus({
-        checked: true,
-        available: status.available,
-        bucketName: status.details.defaultBucketName,
-        error: status.details.error,
-      });
-      return status.available;
-    } catch (error) {
-      setFirebaseStorageStatus({
-        checked: true,
-        available: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unknown error checking Firebase Storage",
-      });
-      return false;
-    }
-  };
-
-  const createFirebaseBucket = async () => {
-    setIsCreatingBucket(true);
-    setBucketCreationResult({});
-
-    try {
-      // First check Firebase connection
-      const firebaseConnected = await checkFirebase();
-      if (!firebaseConnected) {
-        throw new Error(
-          `Firebase connection issues: ${firebaseStatus.error || "Unknown connection error"}`,
-        );
-      }
-
-      // Get the bucket name from the input field, environment, or use the default format
-      const bucketName =
-        customBucketName.trim() ||
-        import.meta.env.VITE_FIREBASE_STORAGE_BUCKET ||
-        `${import.meta.env.VITE_FIREBASE_PROJECT_ID}.appspot.com`;
-
-      if (!bucketName) {
-        throw new Error(
-          "No bucket name provided and no default bucket configured",
-        );
-      }
-
-      // Call the Firebase Admin SDK to create the bucket
-      const { success, bucket, error } = await createStorageBucket(bucketName);
-
-      if (!success) {
-        throw new Error(error || "Unknown error creating bucket");
-      }
-
-      // Update the result state
-      setBucketCreationResult({
-        success: true,
-        bucketName: bucket,
-      });
-
-      // Refresh the Firebase storage status
-      await checkFirebaseStorageBucket();
-
-      // Clear the custom bucket name input after successful creation
-      setCustomBucketName("");
-
-      console.log(`Successfully created Firebase bucket: ${bucket}`);
-    } catch (error) {
-      console.error("Error creating Firebase bucket:", error);
-      setBucketCreationResult({
-        success: false,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    } finally {
-      setIsCreatingBucket(false);
-    }
-  };
-
   const handleMigration = async () => {
     setIsMigrating(true);
     try {
@@ -221,32 +86,19 @@ export default function DataMigration() {
         );
       }
 
-      // If migrating from Firebase, check Firebase connection
-      if (migrationSource === "firebase") {
-        const firebaseConnected = await checkFirebase();
-        if (!firebaseConnected) {
-          throw new Error(
-            `Firebase connection issues: ${firebaseStatus.error || "Unknown connection error"}`,
-          );
-        }
-      } else {
-        // For localStorage, check data consistency
-        const isConsistent = await checkDataConsistency();
-        console.log("Data consistency check result:", isConsistent);
+      // For localStorage, check data consistency
+      const isConsistent = await checkDataConsistency();
+      console.log("Data consistency check result:", isConsistent);
 
-        if (!isConsistent.consistent) {
-          console.warn(
-            `Data consistency issues found: ${isConsistent.inconsistencies.join(", ")}`,
-          );
-          // Continue with migration despite inconsistencies, but log them
-        }
+      if (!isConsistent.consistent) {
+        console.warn(
+          `Data consistency issues found: ${isConsistent.inconsistencies.join(", ")}`,
+        );
+        // Continue with migration despite inconsistencies, but log them
       }
 
-      // Perform the migration based on the selected source
-      const result =
-        migrationSource === "firebase"
-          ? await migrateFirebaseToSupabase()
-          : await migrateLocalStorageToSupabase();
+      // Perform the migration from localStorage to Supabase
+      const result = await migrateLocalStorageToSupabase();
 
       setMigrationResult({
         success: result.success,
@@ -255,10 +107,7 @@ export default function DataMigration() {
       });
 
       // Log the result for debugging
-      console.log(
-        `${migrationSource} migration completed with result:`,
-        result,
-      );
+      console.log(`LocalStorage migration completed with result:`, result);
     } catch (error) {
       console.error("Migration failed:", error);
       setMigrationResult({
@@ -381,15 +230,12 @@ export default function DataMigration() {
         className="w-full"
         onValueChange={handleTabChange}
       >
-        <TabsList className="grid w-full grid-cols-3">
+        <TabsList className="grid w-full grid-cols-2">
           <TabsTrigger value="migration">
             <Database className="h-4 w-4 mr-2" /> Data Migration
           </TabsTrigger>
           <TabsTrigger value="reset">
             <RefreshCw className="h-4 w-4 mr-2" /> Data Reset
-          </TabsTrigger>
-          <TabsTrigger value="firebase">
-            <Cloud className="h-4 w-4 mr-2" /> Firebase Storage
           </TabsTrigger>
         </TabsList>
 
@@ -401,37 +247,15 @@ export default function DataMigration() {
                 Data Migration Utility
               </CardTitle>
               <CardDescription>
-                Migrate data from local storage or Firebase to Supabase to
-                ensure a single source of truth
+                Migrate data from local storage to Supabase to ensure a single
+                source of truth
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex items-center justify-center gap-4 p-4">
-                <div
-                  className="text-center cursor-pointer"
-                  onClick={() => setMigrationSource("localStorage")}
-                >
-                  <HardDrive
-                    className={`h-12 w-12 mx-auto mb-2 ${migrationSource === "localStorage" ? "text-primary" : "text-muted-foreground"}`}
-                  />
-                  <p
-                    className={`font-medium ${migrationSource === "localStorage" ? "text-primary" : ""}`}
-                  >
-                    Local Storage
-                  </p>
-                </div>
-                <div
-                  className="text-center cursor-pointer"
-                  onClick={() => setMigrationSource("firebase")}
-                >
-                  <Flame
-                    className={`h-12 w-12 mx-auto mb-2 ${migrationSource === "firebase" ? "text-primary" : "text-muted-foreground"}`}
-                  />
-                  <p
-                    className={`font-medium ${migrationSource === "firebase" ? "text-primary" : ""}`}
-                  >
-                    Firebase
-                  </p>
+                <div className="text-center">
+                  <HardDrive className="h-12 w-12 mx-auto mb-2 text-primary" />
+                  <p className="font-medium text-primary">Local Storage</p>
                 </div>
                 <ArrowRight className="h-8 w-8 text-muted-foreground" />
                 <div className="text-center">
@@ -527,59 +351,28 @@ export default function DataMigration() {
               )}
             </CardContent>
             <CardFooter className="flex justify-between">
-              {migrationSource === "localStorage" && (
-                <Button
-                  variant="outline"
-                  onClick={handleConsistencyCheck}
-                  disabled={isChecking}
-                >
-                  {isChecking ? (
-                    <>
-                      <span className="mr-2">Checking...</span>
-                      <Progress value={75} className="w-16" />
-                    </>
-                  ) : (
-                    "Check Data Consistency"
-                  )}
-                </Button>
-              )}
-              {migrationSource === "firebase" && (
-                <Button
-                  variant="outline"
-                  onClick={checkFirebase}
-                  disabled={isMigrating}
-                >
-                  {firebaseStatus.checked ? (
-                    firebaseStatus.connected ? (
-                      <span className="flex items-center">
-                        <CheckCircle className="h-4 w-4 mr-2 text-green-500" />
-                        Firebase Connected
-                      </span>
-                    ) : (
-                      <span className="flex items-center">
-                        <AlertCircle className="h-4 w-4 mr-2 text-red-500" />
-                        Firebase Connection Failed
-                      </span>
-                    )
-                  ) : (
-                    "Check Firebase Connection"
-                  )}
-                </Button>
-              )}
               <Button
-                onClick={handleMigration}
-                disabled={
-                  isMigrating ||
-                  (migrationSource === "firebase" && !firebaseStatus.connected)
-                }
+                variant="outline"
+                onClick={handleConsistencyCheck}
+                disabled={isChecking}
               >
+                {isChecking ? (
+                  <>
+                    <span className="mr-2">Checking...</span>
+                    <Progress value={75} className="w-16" />
+                  </>
+                ) : (
+                  "Check Data Consistency"
+                )}
+              </Button>
+              <Button onClick={handleMigration} disabled={isMigrating}>
                 {isMigrating ? (
                   <>
                     <span className="mr-2">Migrating...</span>
                     <Progress value={75} className="w-16" />
                   </>
                 ) : (
-                  `Migrate from ${migrationSource === "firebase" ? "Firebase" : "Local Storage"} to Supabase`
+                  "Migrate from Local Storage to Supabase"
                 )}
               </Button>
             </CardFooter>
@@ -763,252 +556,6 @@ export default function DataMigration() {
                     </Alert>
                   )}
                 </div>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="firebase">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Cloud className="h-5 w-5" />
-                Firebase Storage Bucket
-              </CardTitle>
-              <CardDescription>
-                Check if a Firebase storage bucket exists and is accessible for
-                your application
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="border rounded-lg p-4">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center">
-                    <Cloud className="h-5 w-5 mr-2 text-primary" />
-                    <h3 className="text-lg font-medium">
-                      Storage Bucket Status
-                    </h3>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      onClick={checkFirebaseStorageBucket}
-                    >
-                      {firebaseStorageStatus.checked ? (
-                        firebaseStorageStatus.available ? (
-                          <span className="flex items-center">
-                            <CheckCircle className="h-4 w-4 mr-2 text-green-500" />
-                            Storage Bucket Available
-                          </span>
-                        ) : (
-                          <span className="flex items-center">
-                            <AlertCircle className="h-4 w-4 mr-2 text-red-500" />
-                            Storage Bucket Unavailable
-                          </span>
-                        )
-                      ) : (
-                        "Check Storage Bucket"
-                      )}
-                    </Button>
-                    {firebaseStorageStatus.checked &&
-                      !firebaseStorageStatus.available && (
-                        <Button
-                          variant="default"
-                          onClick={createFirebaseBucket}
-                          disabled={isCreatingBucket}
-                        >
-                          {isCreatingBucket ? (
-                            <>
-                              <span className="mr-2">Creating...</span>
-                              <Progress value={75} className="w-16" />
-                            </>
-                          ) : (
-                            <span className="flex items-center">
-                              <Cloud className="h-4 w-4 mr-2" />
-                              Create Bucket
-                            </span>
-                          )}
-                        </Button>
-                      )}
-                  </div>
-                </div>
-
-                {/* Custom bucket name input field */}
-                {firebaseStorageStatus.checked &&
-                  !firebaseStorageStatus.available && (
-                    <div className="mt-4 mb-4">
-                      <label
-                        htmlFor="custom-bucket-name"
-                        className="block text-sm font-medium mb-1"
-                      >
-                        Custom Bucket Name (Optional)
-                      </label>
-                      <div className="flex gap-2">
-                        <input
-                          id="custom-bucket-name"
-                          type="text"
-                          className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                          placeholder="your-custom-bucket-name"
-                          value={customBucketName}
-                          onChange={(e) => setCustomBucketName(e.target.value)}
-                          disabled={isCreatingBucket}
-                        />
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Leave empty to use the default bucket name from your
-                        Firebase configuration.
-                      </p>
-                    </div>
-                  )}
-
-                {/* Bucket creation result */}
-                {bucketCreationResult.success !== undefined && (
-                  <Alert
-                    variant={
-                      bucketCreationResult.success ? "default" : "destructive"
-                    }
-                    className="mt-4 mb-4"
-                  >
-                    <div className="flex items-start gap-2">
-                      {bucketCreationResult.success ? (
-                        <CheckCircle className="h-5 w-5" />
-                      ) : (
-                        <AlertCircle className="h-5 w-5" />
-                      )}
-                      <div>
-                        <AlertTitle>
-                          {bucketCreationResult.success
-                            ? "Firebase Storage Bucket Created"
-                            : "Failed to Create Firebase Storage Bucket"}
-                        </AlertTitle>
-                        <AlertDescription>
-                          {bucketCreationResult.success ? (
-                            <p>
-                              Successfully created bucket:{" "}
-                              <span className="font-semibold">
-                                {bucketCreationResult.bucketName}
-                              </span>
-                            </p>
-                          ) : (
-                            <p>Error: {bucketCreationResult.error}</p>
-                          )}
-                        </AlertDescription>
-                      </div>
-                    </div>
-                  </Alert>
-                )}
-
-                {/* Firebase storage status */}
-                {firebaseStorageStatus.checked && (
-                  <Alert
-                    variant={
-                      firebaseStorageStatus.available
-                        ? "default"
-                        : "destructive"
-                    }
-                    className="mt-4"
-                  >
-                    <div className="flex items-start gap-2">
-                      {firebaseStorageStatus.available ? (
-                        <CheckCircle className="h-5 w-5" />
-                      ) : (
-                        <AlertCircle className="h-5 w-5" />
-                      )}
-                      <div>
-                        <AlertTitle>
-                          {firebaseStorageStatus.available
-                            ? "Firebase Storage Bucket Available"
-                            : "Firebase Storage Bucket Unavailable"}
-                        </AlertTitle>
-                        <AlertDescription>
-                          {firebaseStorageStatus.available ? (
-                            <div>
-                              <p>
-                                Your Firebase storage bucket is properly
-                                configured and accessible.
-                              </p>
-                              {firebaseStorageStatus.bucketName && (
-                                <p className="mt-2">
-                                  <span className="font-semibold">
-                                    Bucket name:
-                                  </span>{" "}
-                                  {firebaseStorageStatus.bucketName}
-                                </p>
-                              )}
-                              <div className="mt-4">
-                                <h4 className="font-semibold mb-2">
-                                  Connection Instructions:
-                                </h4>
-                                <ol className="list-decimal pl-5 space-y-2">
-                                  <li>
-                                    Your app is already configured to use this
-                                    storage bucket.
-                                  </li>
-                                  <li>
-                                    To upload files, use the Firebase Storage
-                                    SDK:
-                                  </li>
-                                  <pre className="bg-muted p-2 rounded text-xs mt-1 overflow-x-auto">
-                                    {`import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { storage } from "@/services/firebase";
-
-// Example upload function
-const uploadFile = async (file) => {
-  const storageRef = ref(storage, 'files/' + file.name);
-  await uploadBytes(storageRef, file);
-  const downloadURL = await getDownloadURL(storageRef);
-  return downloadURL;
-};`}
-                                  </pre>
-                                </ol>
-                              </div>
-                            </div>
-                          ) : (
-                            <div>
-                              <p>
-                                Your Firebase storage bucket is not properly
-                                configured or accessible.
-                              </p>
-                              {firebaseStorageStatus.error && (
-                                <p className="mt-2 text-sm">
-                                  <span className="font-semibold">Error:</span>{" "}
-                                  {firebaseStorageStatus.error}
-                                </p>
-                              )}
-                              <div className="mt-4">
-                                <h4 className="font-semibold mb-2">
-                                  Troubleshooting Steps:
-                                </h4>
-                                <ol className="list-decimal pl-5 space-y-2">
-                                  <li>
-                                    Verify that you have set the{" "}
-                                    <code className="bg-muted px-1 rounded">
-                                      VITE_FIREBASE_STORAGE_BUCKET
-                                    </code>{" "}
-                                    environment variable.
-                                  </li>
-                                  <li>
-                                    Check that your Firebase project has a
-                                    storage bucket created in the Firebase
-                                    Console.
-                                  </li>
-                                  <li>
-                                    Ensure that your Firebase security rules
-                                    allow access to the storage bucket.
-                                  </li>
-                                  <li>
-                                    Verify that your Firebase API key has
-                                    permission to access Storage services.
-                                  </li>
-                                </ol>
-                              </div>
-                            </div>
-                          )}
-                        </AlertDescription>
-                      </div>
-                    </div>
-                  </Alert>
-                )}
               </div>
             </CardContent>
           </Card>
